@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCV Playground</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/logo-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/logo-icon.png">
+    <link rel="apple-touch-icon" href="assets/logo-icon.png">
+    
+    <!-- Google Fonts: Inter + Material Icons + Material Symbols -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+    
+    <!-- External Libraries -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tesseract OCR Library with Fallback - Latest Version -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" 
+            onerror="loadTesseractFallback()"></script>
+    
+    <script>
+        // Fallback Tesseract loading function
+        function loadTesseractFallback() {
+            console.log('Primary Tesseract CDN failed, loading fallback...');
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js';
+            script.onerror = function() {
+                console.error('All Tesseract CDNs failed to load');
+                // Show user-friendly error
+                setTimeout(() => {
+                    if (typeof Tesseract === 'undefined') {
+                        document.body.innerHTML = `
+                            <div style="padding: 20px; font-family: Arial; text-align: center; color: red;">
+                                <h2>❌ OCR Library Loading Failed</h2>
+                                <p><strong>Quick Fixes:</strong></p>
+                                <ul style="text-align: left; display: inline-block;">
+                                    <li>Hard refresh: Ctrl+Shift+R (Win) or Cmd+Shift+R (Mac)</li>
+                                    <li>Clear browser cache completely</li>
+                                    <li>Check internet connection</li>
+                                    <li>Try different browser (Chrome recommended)</li>
+                                    <li>Disable VPN/firewall temporarily</li>
+                                </ul>
+                                <button onclick="location.reload()" style="padding: 10px 20px; margin-top: 20px;">
+                                    Reload Page
+                                </button>
+                            </div>
+                        `;
+                    }
+                }, 2000);
+            };
+            document.head.appendChild(script);
+        }
+        
+        // Check if Tesseract loaded after page loads
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                if (typeof Tesseract === 'undefined') {
+                    loadTesseractFallback();
+                }
+            }, 1000);
+        });
+    </script>
+    
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="root"></div>
+    
+    <!-- Custom Application Script -->
+    <script type="text/babel" src="app.js"></script>
+</body>
+</html>
