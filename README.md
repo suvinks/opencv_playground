@@ -4,7 +4,7 @@ A comprehensive web-based interactive image processing tool powered by OpenCV.js
 
 ## Features
 
-### 🎨 **59 OpenCV Functions Organized by 15 Categories**
+### 🎨 **61 OpenCV Functions Organized by 16 Categories**
 
 #### 1. Blur & Smoothing (5 functions)
 - Gaussian Blur
@@ -68,14 +68,20 @@ A comprehensive web-based interactive image processing tool powered by OpenCV.js
 - Distance Transform
 - Hough Line Transform
 
-#### 11. Segmentation (5 functions)
+#### 11. Segmentation (4 functions)
 - **K-Means Color Segmentation** - Reduce colors using K-means clustering
 - **Watershed Segmentation** - Advanced region-based segmentation
 - **Mean Shift Segmentation** - Color and spatial smoothing
 - **Pixel Art Segmentation** - Convert images to retro pixel art style (blocks, circles, diamonds, crosses)
-- **Paint by Numbers** - Generate paint-by-numbers templates with color regions and numbering
 
-#### 12. Color Channels (6 functions)
+#### 12. Stylize (3 functions)
+- **Posterize (Palette)** - Pre-smooth and quantize an image to a flat colour palette. Choose the **Pre-Smoothing Style** (Painterly/Kuwahara dabs or Bilateral blur) and **Palette Method** (K-Means or Median Cut); tune **Colour Fairness** (stops one dominant colour from swallowing small vivid regions like flowers), **Colour Emphasis** (boosts LAB hue separation), and **Palette Vibrance** (punches up washed-out cluster means and re-anchors darks/highlights for a commercial-kit look)
+- **Merge Small Regions** - Merge speckle facets into their closest-colour strong-border neighbour for clean, paintable regions, with optional **Protect Vivid Dabs** so small saturated accents (flowers) survive
+- **Random Seed** (on Posterize, K-Means, and Pixel Art) - Clustering is seeded, so the palette is **reproducible** across pipeline re-runs (toggling other steps no longer reshuffles the colours). Hit the 🎲 **Regenerate** button to roll a fresh variation on demand
+- **Numbered Outlines** - Draw shared region borders and number each region (colored fill or blank template)
+- Chain all three via the **Paint by Numbers** built-in preset. Inspired by [drake7707/paintbynumbersgenerator](https://github.com/drake7707/paintbynumbersgenerator) (MIT).
+
+#### 13. Color Channels (6 functions)
 - **Isolate Red Channel**
 - **Isolate Green Channel**
 - **Isolate Blue Channel**
@@ -83,16 +89,16 @@ A comprehensive web-based interactive image processing tool powered by OpenCV.js
 - **HSV Range Filter** - Filter specific hue, saturation, and value ranges
 - **LAB Channel Isolate** - Isolate L, A, or B channels
 
-#### 13. Contour Detection (3 functions)
+#### 14. Contour Detection (3 functions)
 - **Find & Draw Contours** - Detect and outline object contours
 - **Bounding Boxes** - Draw rectangular bounding boxes around objects
 - **Convex Hull** - Draw convex hulls around objects
 
-#### 14. Noise (2 functions)
+#### 15. Noise (2 functions)
 - **Gaussian Noise** - Add Gaussian noise to images
 - **Salt & Pepper Noise** - Add random black and white pixels
 
-#### 15. OCR (1 function)
+#### 16. OCR (1 function)
 - **Tesseract OCR** - Extract text from processed images
   - 14 language options including Auto Detect (English, Arabic, Chinese Simplified/Traditional, French, German, Hindi, Italian, Japanese, Korean, Portuguese, Russian, Spanish)
   - 14 Page Segmentation Modes (PSM 0-13)
@@ -107,7 +113,7 @@ A comprehensive web-based interactive image processing tool powered by OpenCV.js
 3. **Python Code Generation** - Get the exact Python/OpenCV code for your pipeline
 4. **OCR Text Extraction** - Extract text from processed images using Tesseract OCR with 14 languages
 5. **Enable/Disable Functions** - Toggle functions on/off without removing them
-6. **15 Organized Categories** - Functions grouped into logical categories (Blur, Edge Detection, Thresholding, Morphological, Color & Enhancement, Color Space, Geometric, Filters & Effects, Bitwise, Advanced, Segmentation, Color Channels, Contour Detection, Noise, OCR)
+6. **16 Organized Categories** - Functions grouped into logical categories (Blur, Edge Detection, Thresholding, Morphological, Color & Enhancement, Color Space, Geometric, Filters & Effects, Bitwise, Advanced, Segmentation, Stylize, Color Channels, Contour Detection, Noise, OCR)
 7. **Split View** - Compare original and processed images side-by-side
 8. **Parameter Controls** - Intuitive UI for adjusting all function parameters
 9. **Download Results** - Save your processed images
@@ -200,7 +206,7 @@ opencv-playground/
 - **OCR Engine**: Tesseract.js 5 (with fallback CDN)
 - **Styling**: Tailwind CSS + Custom CSS + Material Icons
 - **Build Tool**: None required (runs directly in browser)
-- **Total Functions**: 59 functions across 15 categories
+- **Total Functions**: 61 functions across 16 categories
 
 ## Browser Compatibility
 
@@ -217,7 +223,7 @@ opencv-playground/
 4. **Save Your Work**: Download intermediate results before applying more functions
 5. **Python Code**: Use the generated code as a starting point for your projects
 6. **Use Presets**: Try built-in presets like "Edge Detection Combo" or "Pencil Sketch" for quick results
-7. **Segmentation Tips**: Use K-Means or Watershed for color reduction, Paint by Numbers for coloring templates
+7. **Segmentation Tips**: Use K-Means or Watershed for color reduction; use the Stylize → Paint by Numbers preset for coloring templates
 8. **Channel Isolation**: Use HSV Range Filter to isolate specific colors (e.g., red objects)
 9. **Contour Detection**: Convert to grayscale and threshold first for better contour detection
 10. **OCR Accuracy**: Pre-process with grayscale, CLAHE, and adaptive threshold for best OCR results
@@ -271,9 +277,10 @@ opencv-playground/
 3. Adjust color levels and saturation boost
 
 ### Paint by Numbers Template
-1. Gaussian Blur (smooth details)
-2. Paint by Numbers (choose number of colors)
-3. Download template (colored or blank)
+1. Load the **Paint by Numbers** built-in preset (Stylize), or add the three steps manually:
+2. Posterize (K-Means) — choose the number of colours and pre-smoothing
+3. Merge Small Regions — raise Min Region Area to remove speckle into larger facets
+4. Numbered Outlines — pick colored fill or blank template, then download
 
 ### Object Detection Preparation
 1. Convert to Grayscale
@@ -324,7 +331,7 @@ opencv-playground/
 - **Solution**: Reduce image size first, or reduce the number of colors/attempts in K-Means
 
 **Issue**: Paint by Numbers template is cluttered
-- **Solution**: Increase "Min Region Area to Number" to only label larger regions
+- **Solution**: In the **Merge Small Regions** step, increase "Min Region Area" to collapse speckle into larger facets; raise "Merge Passes" for stronger simplification
 
 **Issue**: Contours not detected
 - **Solution**: Convert to grayscale and apply threshold before using contour detection functions
@@ -340,12 +347,13 @@ This is an open project! Feel free to:
 - Add more artistic effects (filters, styles)
 
 ### Current Implementation
-- **59 functions** across **15 categories**
+- **61 functions** across **16 categories**
 - **Drag-and-drop** pipeline editor
 - **Real-time** processing
 - **Python code** generation
 - **OCR** with 14 languages
-- **Advanced segmentation** (K-Means, Watershed, Mean Shift, Pixel Art, Paint by Numbers)
+- **Advanced segmentation** (K-Means, Watershed, Mean Shift, Pixel Art)
+- **Stylize / Paint by Numbers** pipeline (Posterize → Merge Small Regions → Numbered Outlines)
 - **Channel manipulation** (RGB, HSV, LAB)
 - **Contour detection** (contours, bounding boxes, convex hulls)
 - **Noise generation** (Gaussian, Salt & Pepper)
@@ -363,6 +371,10 @@ Built with ❤️ using:
 - **Tailwind CSS** - Styling framework
 - **Material Icons** - Icon system
 - **Inter Font** - Typography
+
+The **Paint by Numbers** pipeline (facet merging + pole-of-inaccessibility label placement) is
+adapted from [drake7707/paintbynumbersgenerator](https://github.com/drake7707/paintbynumbersgenerator)
+by drake7707, used under the MIT License. Thanks to the author for the excellent reference implementation.
 
 ---
 

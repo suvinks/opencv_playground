@@ -1,5 +1,15 @@
 const { useState, useEffect, useRef } = React;
 
+// Seeded PRNG (mulberry32): deterministic float stream in [0,1) from an integer seed.
+// Used by the stochastic clustering steps so a fixed seed reproduces the exact palette
+// across pipeline re-runs, and the Regenerate button rolls a new variation on demand.
+const mulberry32 = (a) => () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+};
+
 // ==================== MATERIAL ICON COMPONENTS ====================
 const MaterialIcon = ({ name, size = 24, className = "", style = {}, ...rest }) => (
     <span className={`material-icons ${className}`} style={{ fontSize: size, ...style }} {...rest}>
@@ -376,7 +386,8 @@ const OPENCV_CATEGORIES = {
             id: 'kmeansSegment', name: 'K-Means Color Segmentation',
             params: [
                 { name: 'k', label: 'Number of Colors (K)', type: 'number', default: 4, min: 2, max: 16, step: 1 },
-                { name: 'attempts', label: 'Attempts', type: 'number', default: 3, min: 1, max: 10, step: 1 }
+                { name: 'attempts', label: 'Attempts', type: 'number', default: 3, min: 1, max: 10, step: 1 },
+                { name: 'seed', label: 'Random Seed', type: 'seed', default: 1 }
             ]
         },
         {
@@ -410,20 +421,58 @@ const OPENCV_CATEGORIES = {
                 { name: 'bgBrightness', label: 'Background Brightness', type: 'range', default: 20, min: 0, max: 255, step: 5 },
                 { name: 'colorLevels', label: 'Color Quantization Levels', type: 'range', default: 256, min: 2, max: 256, step: 1 },
                 { name: 'satBoost', label: 'Saturation Boost', type: 'range', default: 1, min: 0, max: 3, step: 0.1 },
+                { name: 'seed', label: 'Random Seed', type: 'seed', default: 1 },
+            ]
+        },
+    ],
+    // Paint-by-numbers pipeline (facet merge + pole-of-inaccessibility labeling) adapted from
+    // drake7707/paintbynumbersgenerator — MIT License — https://github.com/drake7707/paintbynumbersgenerator
+    'Stylize': [
+        {
+            id: 'pbnPosterize', name: 'Posterize (Palette)',
+            params: [
+                { name: 'numColors', label: 'Number of Colors (K)', type: 'range', default: 12, min: 2, max: 24, step: 1 },
+                { name: 'smoothingStyle', label: 'Pre-Smoothing Style', type: 'select', default: 'painterly', options: [
+                    { value: 'painterly', label: 'Painterly (Kuwahara dabs)' },
+                    { value: 'bilateral', label: 'Bilateral (soft blur)' }
+                ]},
+                { name: 'smoothingStrength', label: 'Pre-Smoothing Strength', type: 'range', default: 2, min: 0, max: 5, step: 1 },
+                { name: 'vibrance', label: 'Palette Vibrance', type: 'range', default: 0.35, min: 0, max: 1, step: 0.05 },
+                { name: 'colorSpace', label: 'Clustering Color Space', type: 'select', default: 'lab', options: [
+                    { value: 'lab', label: 'LAB (perceptual)' },
+                    { value: 'rgb', label: 'RGB' }
+                ]},
+                { name: 'paletteMethod', label: 'Palette Method', type: 'select', default: 'kmeans', options: [
+                    { value: 'kmeans',    label: 'K-Means (fair)' },
+                    { value: 'mediancut', label: 'Median Cut' }
+                ]},
+                { name: 'colorFairness', label: 'Colour Fairness (rare-colour preservation)', type: 'range', default: 0.5, min: 0, max: 1, step: 0.05 },
+                { name: 'chromaBoost', label: 'Colour Emphasis (LAB a*/b*)', type: 'range', default: 1.6, min: 1, max: 3, step: 0.1 },
+                { name: 'seed', label: 'Random Seed', type: 'seed', default: 1 },
             ]
         },
         {
-            id: 'paintByNumbers', name: 'Paint by Numbers',
+            id: 'pbnMergeRegions', name: 'Merge Small Regions',
             params: [
-                { name: 'numColors', label: 'Number of Colors (K)', type: 'range', default: 8, min: 2, max: 12, step: 1 },
-                { name: 'smoothingStrength', label: 'Smoothing Strength (passes)', type: 'range', default: 3, min: 1, max: 5, step: 1 },
-                { name: 'minRegionArea', label: 'Min Region Area to Number (px)', type: 'range', default: 150, min: 20, max: 2000, step: 10 },
-                { name: 'lineThickness', label: 'Outline Thickness (px)', type: 'range', default: 1, min: 1, max: 5, step: 1 },
-                { name: 'fontSize', label: 'Max Number Font Size (px)', type: 'range', default: 14, min: 8, max: 32, step: 1 },
+                { name: 'minRegionArea', label: 'Min Region Area (px)', type: 'range', default: 200, min: 10, max: 5000, step: 10 },
+                { name: 'passes', label: 'Merge Passes', type: 'range', default: 2, min: 1, max: 4, step: 1 },
+                { name: 'protectVivid', label: 'Protect Vivid Dabs', type: 'select', default: 1, options: [
+                    { value: 1, label: 'On (keep small saturated regions)' },
+                    { value: 0, label: 'Off' }
+                ]},
+            ]
+        },
+        {
+            id: 'pbnOutline', name: 'Numbered Outlines',
+            params: [
                 { name: 'displayMode', label: 'Display Mode', type: 'select', default: 0, options: [
                     { value: 0, label: 'Colored Fill + Outlines + Numbers' },
                     { value: 1, label: 'Blank Template (Outlines + Numbers Only)' }
                 ]},
+                { name: 'lineThickness', label: 'Outline Thickness (px)', type: 'range', default: 1, min: 1, max: 5, step: 1 },
+                { name: 'lineShade', label: 'Border/Number Shade (0=black, higher=lighter)', type: 'range', default: 120, min: 0, max: 200, step: 10 },
+                { name: 'fontSize', label: 'Max Number Font Size (px)', type: 'range', default: 16, min: 8, max: 32, step: 1 },
+                { name: 'minLabelArea', label: 'Min Region Area to Number (px)', type: 'range', default: 200, min: 20, max: 5000, step: 10 },
             ]
         },
     ],
@@ -563,6 +612,7 @@ const CATEGORY_ICONS = {
     'Morphological': 'texture',
     'Geometric': 'transform',
     'Segmentation': 'layers',
+    'Stylize': 'brush',
     'Color Channels': 'color_lens',
     'Contour Detection': 'account_tree',
     'Noise': 'grain',
@@ -704,6 +754,18 @@ const BUILTIN_PRESETS = [
             { id: 'bilateralFilter',  name: 'Bilateral Filter',     enabled: true, params: { d: 7, sigmaColor: 50, sigmaSpace: 50 } },
             { id: 'meanShiftSegment', name: 'Mean Shift Segment',   enabled: true, params: { sp: 25, sr: 45 } },
             { id: 'findContours',     name: 'Find Contours',        enabled: true, params: { threshold: 30, thickness: 1, colorR: 255, colorG: 80, colorB: 0 } }
+        ]
+    },
+    // ── Stylize ──────────────────────────────────────────────────────
+    // Paint by Numbers pipeline — inspired by drake7707/paintbynumbersgenerator (MIT):
+    // posterize to a palette, merge away speckle into large paintable facets, then draw
+    // shared outlines and number each region.
+    {
+        name: 'Paint by Numbers',
+        functions: [
+            { id: 'pbnPosterize',    name: 'Posterize (Palette)',  enabled: true, params: { numColors: 12, smoothingStyle: 'painterly', smoothingStrength: 2, vibrance: 0.35, colorSpace: 'lab', paletteMethod: 'kmeans', colorFairness: 0.5, chromaBoost: 1.6, seed: 1 } },
+            { id: 'pbnMergeRegions', name: 'Merge Small Regions',  enabled: true, params: { minRegionArea: 200, passes: 2, protectVivid: 1 } },
+            { id: 'pbnOutline',      name: 'Numbered Outlines',    enabled: true, params: { displayMode: 0, lineThickness: 1, lineShade: 120, fontSize: 16, minLabelArea: 200 } }
         ]
     }
 ];
@@ -918,6 +980,7 @@ img = cv2.imread('input_image.jpg')
             case 'kmeansSegment': {
                 const k = func.params.k;
                 code += `# K-Means Color Segmentation (K=${k})\n`;
+                code += `cv2.setRNGSeed(${(parseInt(func.params.seed) >>> 0) || 1})  # reproducible clustering\n`;
                 code += `Z = img.reshape((-1, 3)).astype(np.float32)\n`;
                 code += `criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)\n`;
                 code += `_, labels, centers = cv2.kmeans(Z, ${k}, None, criteria, ${func.params.attempts}, cv2.KMEANS_RANDOM_CENTERS)\n`;
@@ -959,6 +1022,7 @@ img = cv2.imread('input_image.jpg')
                 code += `h, w = img.shape[:2]\n`;
                 code += `out = np.full_like(img, ${bg})\n`;
                 if (lvl < 256) code += `# Quantize to ${lvl} colors via k-means\n` +
+                    `cv2.setRNGSeed(${(parseInt(func.params.seed) >>> 0) || 1})  # reproducible clustering\n` +
                     `Z = img.reshape((-1, 3)).astype(np.float32)\n` +
                     `criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)\n` +
                     `_, labels, centers = cv2.kmeans(Z, ${lvl}, None, criteria, 3, cv2.KMEANS_PP_CENTERS)\n` +
@@ -982,60 +1046,143 @@ img = cv2.imread('input_image.jpg')
                 code += `img = out\n`;
                 break;
             }
-            case 'paintByNumbers': {
-                const nk = parseInt(func.params.numColors), minArea = parseInt(func.params.minRegionArea);
-                const lineW = parseInt(func.params.lineThickness), maxFSize = parseInt(func.params.fontSize);
-                const passes = parseInt(func.params.smoothingStrength);
-                const dispMode = parseInt(func.params.displayMode);
-                code += `# Paint by Numbers — K=${nk} colors, min region area=${minArea}px\n`;
-                code += `for _ in range(${passes}):  # smoothing passes so photos collapse into coherent blobs\n`;
-                code += `    img = cv2.bilateralFilter(img, 9, 60, 60)\n`;
-                code += `h, w = img.shape[:2]\n`;
-                code += `Z = img.reshape((-1, 3)).astype(np.float32)\n`;
-                code += `criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)\n`;
-                code += `_, labels, centers = cv2.kmeans(Z, ${nk}, None, criteria, 3, cv2.KMEANS_PP_CENTERS)\n`;
-                code += `centers = np.uint8(centers)\n`;
-                code += `labels = labels.reshape(h, w)\n`;
-                code += `\n`;
-                if (dispMode === 1) {
-                    code += `out = np.full((h, w, 3), 255, dtype=np.uint8)  # blank template\n`;
-                } else {
-                    code += `out = centers[labels.flatten()].reshape(h, w, 3).astype(np.uint8)\n`;
+            case 'pbnPosterize': {
+                const nk = Math.max(2, Math.min(24, parseInt(func.params.numColors) || 12));
+                let passes = parseInt(func.params.smoothingStrength); if (isNaN(passes)) passes = 2;
+                const useLab = String(func.params.colorSpace || 'lab') === 'lab';
+                const method = String(func.params.paletteMethod || 'kmeans');
+                let chroma = parseFloat(func.params.chromaBoost); if (isNaN(chroma)) chroma = 1.6;
+                let fairness = parseFloat(func.params.colorFairness); if (isNaN(fairness)) fairness = 0.5;
+                const smoothStyle = String(func.params.smoothingStyle || 'painterly');
+                let vib = parseFloat(func.params.vibrance); if (isNaN(vib)) vib = 0.35;
+                code += `# Posterize (${method === 'mediancut' ? 'Median Cut' : 'K-Means, fair'}) — quantize to ${nk} colors.\n`;
+                code += `# Paint-by-numbers steps adapted from drake7707/paintbynumbersgenerator (MIT):\n`;
+                code += `#   https://github.com/drake7707/paintbynumbersgenerator\n`;
+                if (passes > 0 && smoothStyle === 'painterly') {
+                    code += `# The interactive app uses a Kuwahara filter here (painterly dabs, keeps small\n`;
+                    code += `# vivid details unmixed); cv2 has no built-in Kuwahara — edgePreservingFilter\n`;
+                    code += `# is the closest stock approximation.\n`;
+                    code += `img = cv2.edgePreservingFilter(img, flags=cv2.RECURS_FILTER, sigma_s=${20 + passes * 10}, sigma_r=0.25)\n`;
+                } else if (passes > 0) {
+                    code += `for _ in range(${passes}):  # pre-smoothing so photos collapse into coherent blobs\n`;
+                    code += `    img = cv2.bilateralFilter(img, 9, 60, 60)\n`;
                 }
-                code += `\n`;
-                code += `kernel = np.ones((3, 3), np.uint8)\n`;
-                code += `for c in range(${nk}):\n`;
-                code += `    mask = (labels == c).astype(np.uint8) * 255\n`;
-                code += `    # Open removes speckle noise, close fills small gaps — cleans up jagged k-means edges\n`;
-                code += `    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)\n`;
-                code += `    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)\n`;
-                code += `\n`;
-                code += `    # Smooth vector outline (simplified contour) instead of a raw jagged pixel boundary\n`;
-                code += `    contours, _ = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)\n`;
-                code += `    for contour in contours:\n`;
-                code += `        peri = cv2.arcLength(contour, True)\n`;
-                code += `        if peri < 4:\n`;
-                code += `            continue\n`;
-                code += `        approx = cv2.approxPolyDP(contour, max(0.8, peri * 0.006), True)\n`;
-                code += `        cv2.polylines(out, [approx], True, (0, 0, 0), ${lineW}, cv2.LINE_AA)\n`;
-                code += `\n`;
-                code += `    # Distance-transform peak = center of the largest inscribed circle per region —\n`;
-                code += `    # always falls strictly inside the shape (unlike a centroid on a concave region),\n`;
-                code += `    # and its radius bounds how large a legible number can be.\n`;
-                code += `    num_labels, comp_labels = cv2.connectedComponents(mask)\n`;
+                code += `h, w = img.shape[:2]\n`;
+                if (method === 'mediancut') {
+                    code += `work = ${useLab ? 'cv2.cvtColor(img, cv2.COLOR_BGR2LAB)' : 'img'}  # clustering color space\n`;
+                    code += `pts = work.reshape(-1, 3).astype(np.int32)\n`;
+                    code += `boxes = [np.arange(len(pts))]\n`;
+                    code += `while len(boxes) < ${nk}:  # split the widest colour box at its median\n`;
+                    code += `    ranges = [int((pts[b].max(0) - pts[b].min(0)).max()) if len(b) > 1 else -1 for b in boxes]\n`;
+                    code += `    q = int(np.argmax(ranges))\n`;
+                    code += `    if ranges[q] <= 0: break\n`;
+                    code += `    b = boxes[q]; ax = int((pts[b].max(0) - pts[b].min(0)).argmax())\n`;
+                    code += `    order = b[np.argsort(pts[b][:, ax])]; vals = pts[order][:, ax]\n`;
+                    code += `    thr = (int(vals[0]) + int(vals[-1])) / 2  # split at axis midpoint (isolates outlier colours)\n`;
+                    code += `    k = min(max(int(np.searchsorted(vals, thr, side='right')), 1), len(order) - 1)\n`;
+                    code += `    boxes[q:q+1] = [order[:k], order[k:]]\n`;
+                    code += `out = np.empty_like(pts)\n`;
+                    code += `for b in boxes: out[b] = pts[b].mean(0).astype(np.int32)  # box palette = mean colour\n`;
+                    code += `quant = np.clip(out, 0, 255).reshape(h, w, 3).astype(np.uint8)\n`;
+                    code += `img = ${useLab ? 'cv2.cvtColor(quant, cv2.COLOR_LAB2BGR)' : 'quant'}\n`;
+                } else {
+                    code += `# NOTE: the interactive app also weights samples by count**${fairness} (colour fairness)\n`;
+                    code += `#       to keep rare colours; cv2.kmeans can't weight samples, so this approximates it.\n`;
+                    code += `work = ${useLab ? 'cv2.cvtColor(img, cv2.COLOR_BGR2LAB)' : 'img'}.astype(np.float32)\n`;
+                    if (useLab && chroma !== 1) {
+                        code += `work[..., 1:] = (work[..., 1:] - 128) * ${chroma} + 128  # emphasise a*/b* (hue)\n`;
+                    }
+                    code += `cv2.setRNGSeed(${(parseInt(func.params.seed) >>> 0) || 1})  # reproducible clustering\n`;
+                    code += `Z = work.reshape((-1, 3))\n`;
+                    code += `criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)\n`;
+                    code += `_, labels, centers = cv2.kmeans(Z, ${nk}, None, criteria, 3, cv2.KMEANS_PP_CENTERS)\n`;
+                    if (useLab && chroma !== 1) {
+                        code += `centers[:, 1:] = (centers[:, 1:] - 128) / ${chroma} + 128  # unscale a*/b*\n`;
+                    }
+                    if (useLab && vib > 0) {
+                        code += `# Palette punch: cluster means regress to grey — boost vibrance + re-anchor value\n`;
+                        code += `centers[:, 1:] = (centers[:, 1:] - 128) * ${(1 + vib).toFixed(2)} + 128  # vibrance\n`;
+                        code += `p2, p98 = np.percentile(work[..., 0], [2, 98])\n`;
+                        code += `L = centers[:, 0]\n`;
+                        code += `t2, t98 = min(p2, L.min()), max(p98, L.max())  # expansion-only value anchoring\n`;
+                        code += `centers[:, 0] = t2 + (L - L.min()) * (t98 - t2) / max(L.max() - L.min(), 1)\n`;
+                    }
+                    code += `centers = np.clip(centers, 0, 255).astype(np.uint8)\n`;
+                    code += `quant = centers[labels.flatten()].reshape((h, w, 3))\n`;
+                    code += `img = ${useLab ? 'cv2.cvtColor(quant, cv2.COLOR_LAB2BGR)' : 'quant'}\n`;
+                }
+                break;
+            }
+            case 'pbnMergeRegions': {
+                let minArea = parseInt(func.params.minRegionArea); if (isNaN(minArea)) minArea = 200;
+                let passes = parseInt(func.params.passes); if (isNaN(passes)) passes = 2;
+                code += `# Merge Small Regions — merge facets below ${minArea}px into their dominant neighbor.\n`;
+                code += `# Adapted from drake7707/paintbynumbersgenerator (MIT).\n`;
+                code += `# NOTE: the interactive app additionally prefers the closest-COLOUR strong-border\n`;
+                code += `#       neighbour and protects small vivid dabs (flowers) from being absorbed.\n`;
+                code += `h, w = img.shape[:2]\n`;
+                code += `colors, idx = np.unique(img.reshape(-1, 3), axis=0, return_inverse=True)\n`;
+                code += `idx = idx.reshape(h, w)\n`;
+                code += `k3 = np.ones((3, 3), np.uint8)\n`;
+                code += `for _ in range(${passes}):\n`;
+                code += `    changed = False\n`;
+                code += `    for p in range(len(colors)):\n`;
+                code += `        num, comp = cv2.connectedComponents((idx == p).astype(np.uint8))\n`;
+                code += `        for c in range(1, num):\n`;
+                code += `            region = (comp == c)\n`;
+                code += `            if region.sum() >= ${minArea}:\n`;
+                code += `                continue\n`;
+                code += `            border = cv2.dilate(region.astype(np.uint8), k3).astype(bool) & ~region\n`;
+                code += `            neigh = idx[border]\n`;
+                code += `            neigh = neigh[neigh != p]\n`;
+                code += `            if neigh.size == 0:\n`;
+                code += `                continue\n`;
+                code += `            idx[region] = np.bincount(neigh).argmax()  # longest shared border wins\n`;
+                code += `            changed = True\n`;
+                code += `    if not changed:\n`;
+                code += `        break\n`;
+                code += `img = colors[idx.reshape(-1)].reshape(h, w, 3).astype(np.uint8)\n`;
+                break;
+            }
+            case 'pbnOutline': {
+                const dispMode = parseInt(func.params.displayMode) === 1 ? 1 : 0;
+                const lineW = Math.max(1, parseInt(func.params.lineThickness) || 1);
+                const maxFSize = Math.max(8, parseInt(func.params.fontSize) || 16);
+                let minLabelArea = parseInt(func.params.minLabelArea); if (isNaN(minLabelArea)) minLabelArea = 200;
+                let ls = parseInt(func.params.lineShade); if (isNaN(ls)) ls = 120; ls = Math.max(0, Math.min(255, ls));
+                code += `# Numbered Outlines — shared borders + numbers at each region's pole of inaccessibility.\n`;
+                code += `# Adapted from drake7707/paintbynumbersgenerator (MIT).\n`;
+                code += `h, w = img.shape[:2]\n`;
+                code += `colors, idx = np.unique(img.reshape(-1, 3), axis=0, return_inverse=True)\n`;
+                code += `idx = idx.reshape(h, w)\n`;
+                if (dispMode === 1) {
+                    code += `out = np.full((h, w, 3), 255, np.uint8)  # blank template\n`;
+                } else {
+                    code += `out = img.copy()\n`;
+                }
+                code += `# Shared borders: a pixel differs from its right/down neighbor (one line per edge)\n`;
+                code += `edge = np.zeros((h, w), np.uint8)\n`;
+                code += `edge[:, :-1] |= (idx[:, :-1] != idx[:, 1:]).astype(np.uint8)\n`;
+                code += `edge[:-1, :] |= (idx[:-1, :] != idx[1:, :]).astype(np.uint8)\n`;
+                if (lineW > 1) {
+                    code += `edge = cv2.dilate(edge, np.ones((${lineW}, ${lineW}), np.uint8))\n`;
+                }
+                code += `out[edge.astype(bool)] = (${ls}, ${ls}, ${ls})  # soft-grey borders (paint-friendly)\n`;
+                code += `for p in range(len(colors)):\n`;
+                code += `    mask = (idx == p).astype(np.uint8)\n`;
+                code += `    num, comp = cv2.connectedComponents(mask)\n`;
                 code += `    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)\n`;
-                code += `    for comp in range(1, num_labels):\n`;
-                code += `        comp_mask = (comp_labels == comp)\n`;
-                code += `        if comp_mask.sum() < ${minArea}:\n`;
+                code += `    for c in range(1, num):\n`;
+                code += `        region = (comp == c)\n`;
+                code += `        if region.sum() < ${minLabelArea}:\n`;
                 code += `            continue\n`;
-                code += `        comp_dist = np.where(comp_mask, dist, 0)\n`;
-                code += `        _, max_dist, _, max_loc = cv2.minMaxLoc(comp_dist)\n`;
+                code += `        _, max_dist, _, max_loc = cv2.minMaxLoc(np.where(region, dist, 0))\n`;
                 code += `        font_size = min(${maxFSize}, int(max_dist * 1.5))\n`;
                 code += `        if font_size < 8:\n`;
                 code += `            continue  # inscribed circle too small to label legibly\n`;
-                code += `        text = str(c + 1)\n`;
+                code += `        text = str(p + 1)\n`;
                 code += `        cv2.putText(out, text, max_loc, cv2.FONT_HERSHEY_SIMPLEX, font_size/30.0, (255,255,255), 4, cv2.LINE_AA)\n`;
-                code += `        cv2.putText(out, text, max_loc, cv2.FONT_HERSHEY_SIMPLEX, font_size/30.0, (0,0,0), 1, cv2.LINE_AA)\n`;
+                code += `        cv2.putText(out, text, max_loc, cv2.FONT_HERSHEY_SIMPLEX, font_size/30.0, (${ls},${ls},${ls}), 1, cv2.LINE_AA)\n`;
                 code += `img = out\n`;
                 break;
             }
@@ -2134,10 +2281,11 @@ const OpenCVInteractive = () => {
                             const d = dst.data;
                             const K = Math.max(2, Math.min(16, Math.round(func.params.k) || 4));
                             const n = d.length >> 2; // total pixels
+                            const rand = mulberry32((parseInt(func.params.seed) >>> 0) || 1); // seeded → reproducible
 
                             // k-means++ initialisation: spread initial centers
                             const cx = new Float32Array(K * 3);
-                            const firstIdx = Math.floor(Math.random() * n);
+                            const firstIdx = Math.floor(rand() * n);
                             cx[0] = d[firstIdx*4]; cx[1] = d[firstIdx*4+1]; cx[2] = d[firstIdx*4+2];
                             for (let ci = 1; ci < K; ci++) {
                                 let sumD = 0;
@@ -2151,7 +2299,7 @@ const OpenCVInteractive = () => {
                                     }
                                     dists[i] = minD; sumD += minD;
                                 }
-                                let r = Math.random() * sumD;
+                                let r = rand() * sumD;
                                 for (let i = 0; i < n; i++) {
                                     r -= dists[i];
                                     if (r <= 0) { cx[ci*3]=d[i*4]; cx[ci*3+1]=d[i*4+1]; cx[ci*3+2]=d[i*4+2]; break; }
@@ -2311,9 +2459,10 @@ const OpenCVInteractive = () => {
                                     samples.push(srcD[i*4], srcD[i*4+1], srcD[i*4+2]);
                                 }
                                 const ns = samples.length / 3;
+                                const rand = mulberry32((parseInt(func.params.seed) >>> 0) || 1); // seeded → reproducible
                                 // k-means++ initialisation
                                 const kmcx = new Float32Array(K * 3);
-                                const fi = Math.floor(Math.random() * ns);
+                                const fi = Math.floor(rand() * ns);
                                 kmcx[0]=samples[fi*3]; kmcx[1]=samples[fi*3+1]; kmcx[2]=samples[fi*3+2];
                                 for (let ci = 1; ci < K; ci++) {
                                     let sumD = 0;
@@ -2327,7 +2476,7 @@ const OpenCVInteractive = () => {
                                         }
                                         dists[i]=minD; sumD+=minD;
                                     }
-                                    let rr = Math.random() * sumD;
+                                    let rr = rand() * sumD;
                                     for (let i = 0; i < ns; i++) { rr-=dists[i]; if (rr<=0) { kmcx[ci*3]=samples[i*3]; kmcx[ci*3+1]=samples[i*3+1]; kmcx[ci*3+2]=samples[i*3+2]; break; } }
                                 }
                                 // k-means iterate (10 passes)
@@ -2453,163 +2602,610 @@ const OpenCVInteractive = () => {
                             break;
                         }
 
-                        case 'paintByNumbers': {
+                        // ============================================================================
+                        // Paint by Numbers pipeline (Stylize category). Decomposed into three
+                        // composable steps: Posterize → Merge Small Regions → Numbered Outlines.
+                        // The facet-merge and pole-of-inaccessibility labeling approach is adapted
+                        // from drake7707/paintbynumbersgenerator — MIT License —
+                        // https://github.com/drake7707/paintbynumbersgenerator
+                        // Each step passes a flat, quantized RGBA image, which itself IS the facet
+                        // map (unique color = palette entry, connected component = facet).
+                        // ============================================================================
+                        case 'pbnPosterize': {
+                            // Pre-smooth then build a quantized palette — the foundation the later
+                            // paint-by-numbers steps build on. Clustering runs on a colour HISTOGRAM
+                            // (not per-pixel) so we can cheaply de-weight large flat areas (fairness)
+                            // and emphasise hue (chroma) — fixing the "one dominant colour swallows
+                            // the small vivid regions" failure of plain area-weighted k-means.
                             const W = temp.cols, H = temp.rows;
-                            const K = Math.max(2, Math.min(12, Math.round(func.params.numColors) || 8));
-                            const minArea = Math.max(1, parseInt(func.params.minRegionArea) || 150);
-                            const lineThickness = Math.max(1, parseInt(func.params.lineThickness) || 1);
-                            const maxFontSize = Math.max(8, parseInt(func.params.fontSize) || 14);
-                            const smoothPasses = Math.max(1, Math.min(5, parseInt(func.params.smoothingStrength) || 3));
-                            const displayMode = parseInt(func.params.displayMode) === 1 ? 1 : 0;
-                            const MIN_FONT_SIZE = 8; // below this a number isn't legible — skip labeling that region
+                            const K = Math.max(2, Math.min(24, Math.round(func.params.numColors) || 12));
+                            let smoothPasses = parseInt(func.params.smoothingStrength);
+                            if (isNaN(smoothPasses)) smoothPasses = 2;
+                            smoothPasses = Math.max(0, Math.min(5, smoothPasses));
+                            const smoothStyle = String(func.params.smoothingStyle || 'painterly');
+                            const useLab = String(func.params.colorSpace || 'lab') === 'lab';
+                            const method = String(func.params.paletteMethod || 'kmeans');
+                            let fairness = parseFloat(func.params.colorFairness);
+                            if (isNaN(fairness)) fairness = 0.5;
+                            fairness = Math.max(0, Math.min(1, fairness));
+                            let chroma = parseFloat(func.params.chromaBoost);
+                            if (isNaN(chroma)) chroma = 1.6;
+                            chroma = Math.max(1, Math.min(3, chroma));
+                            const chromaScale = useLab ? chroma : 1; // a*/b* emphasis only meaningful in LAB
+                            let vibrance = parseFloat(func.params.vibrance);
+                            if (isNaN(vibrance)) vibrance = 0.35;
+                            vibrance = Math.max(0, Math.min(1, vibrance));
 
-                            // ---- Step 1: strong pre-smoothing so real photos collapse into large, coherent
-                            // color blobs instead of fragmenting into tiny same-color islands. Iterated like
-                            // meanShiftSegment's bilateral passes, since one pass alone leaves busy photos noisy.
-                            // bilateralFilter only accepts CV_8UC1/CV_8UC3, so drop the alpha channel first.
-                            const rgbForSmooth = new cv.Mat();
-                            cv.cvtColor(temp, rgbForSmooth, cv.COLOR_RGBA2RGB);
-                            let smoothed = rgbForSmooth;
-                            for (let p = 0; p < smoothPasses; p++) {
-                                const next = new cv.Mat();
-                                cv.bilateralFilter(smoothed, next, 9, 60, 60);
+                            // cvtColor/bilateralFilter want 3-channel — drop alpha first.
+                            const rgb = new cv.Mat();
+                            cv.cvtColor(temp, rgb, cv.COLOR_RGBA2RGB);
+                            let smoothed = rgb;
+                            if (smoothPasses > 0 && smoothStyle === 'painterly') {
+                                // Kuwahara filter: per pixel, evaluate the 4 overlapping (r+1)x(r+1)
+                                // quadrant windows and output the per-channel mean of the quadrant with
+                                // the lowest luminance variance. Produces flat painterly "dabs" with
+                                // crisp edges — unlike a blur, it never mixes a small vivid flower into
+                                // its surroundings, so minority colours reach clustering unpolluted.
+                                const r = 1 + smoothPasses;
+                                const sd = smoothed.data;
+                                const W1 = W + 1;
+                                // Integral images: luminance, luminance², and each RGB channel.
+                                const iL  = new Float64Array(W1 * (H + 1));
+                                const iL2 = new Float64Array(W1 * (H + 1));
+                                const iR  = new Float64Array(W1 * (H + 1));
+                                const iG  = new Float64Array(W1 * (H + 1));
+                                const iB  = new Float64Array(W1 * (H + 1));
+                                for (let y = 0; y < H; y++) {
+                                    let rowL = 0, rowL2 = 0, rowR = 0, rowG = 0, rowB = 0;
+                                    for (let x = 0; x < W; x++) {
+                                        const i3 = (y * W + x) * 3;
+                                        const rr = sd[i3], gg = sd[i3+1], bb = sd[i3+2];
+                                        const lum = 0.299*rr + 0.587*gg + 0.114*bb;
+                                        rowL += lum; rowL2 += lum*lum; rowR += rr; rowG += gg; rowB += bb;
+                                        const o = (y + 1) * W1 + (x + 1), u = y * W1 + (x + 1);
+                                        iL[o]  = iL[u]  + rowL;
+                                        iL2[o] = iL2[u] + rowL2;
+                                        iR[o]  = iR[u]  + rowR;
+                                        iG[o]  = iG[u]  + rowG;
+                                        iB[o]  = iB[u]  + rowB;
+                                    }
+                                }
+                                const boxSum = (img, x0, y0, x1, y1) => // inclusive pixel coords
+                                    img[(y1+1)*W1 + (x1+1)] - img[y0*W1 + (x1+1)] - img[(y1+1)*W1 + x0] + img[y0*W1 + x0];
+                                const outK = new cv.Mat(H, W, cv.CV_8UC3);
+                                const od = outK.data;
+                                for (let y = 0; y < H; y++) {
+                                    for (let x = 0; x < W; x++) {
+                                        // 4 quadrants, each spanning [±r] and including the centre pixel.
+                                        let bestVar = Infinity, bR = 0, bG = 0, bB = 0;
+                                        for (let q = 0; q < 4; q++) {
+                                            const x0 = (q & 1) ? x : Math.max(0, x - r);
+                                            const x1 = (q & 1) ? Math.min(W - 1, x + r) : x;
+                                            const y0 = (q & 2) ? y : Math.max(0, y - r);
+                                            const y1 = (q & 2) ? Math.min(H - 1, y + r) : y;
+                                            const cntQ = (x1 - x0 + 1) * (y1 - y0 + 1);
+                                            const sL = boxSum(iL, x0, y0, x1, y1);
+                                            const v = boxSum(iL2, x0, y0, x1, y1) / cntQ - (sL / cntQ) * (sL / cntQ);
+                                            if (v < bestVar) {
+                                                bestVar = v;
+                                                bR = boxSum(iR, x0, y0, x1, y1) / cntQ;
+                                                bG = boxSum(iG, x0, y0, x1, y1) / cntQ;
+                                                bB = boxSum(iB, x0, y0, x1, y1) / cntQ;
+                                            }
+                                        }
+                                        const i3 = (y * W + x) * 3;
+                                        od[i3] = Math.round(bR); od[i3+1] = Math.round(bG); od[i3+2] = Math.round(bB);
+                                    }
+                                }
                                 smoothed.delete();
-                                smoothed = next;
+                                smoothed = outK;
+                            } else {
+                                // Bilateral: soft edge-preserving blur so photos collapse into blobs.
+                                for (let p = 0; p < smoothPasses; p++) {
+                                    const next = new cv.Mat();
+                                    cv.bilateralFilter(smoothed, next, 9, 60, 60);
+                                    smoothed.delete();
+                                    smoothed = next;
+                                }
                             }
 
-                            // ---- Step 2: full-image k-means++ quantization (adapted from kmeansSegment) ----
-                            const srcD = smoothed.data; // 3-channel (RGB)
+                            // Cluster in a perceptual space (LAB) by default so grouping matches the eye.
+                            let clusterMat = smoothed;
+                            if (useLab) {
+                                clusterMat = new cv.Mat();
+                                cv.cvtColor(smoothed, clusterMat, cv.COLOR_RGB2Lab);
+                            }
+                            const srcD = clusterMat.data; // 3-channel (L,a,b or R,G,B)
                             const n = W * H;
-                            const cx = new Float32Array(K * 3);
-                            const firstIdx = Math.floor(Math.random() * n);
-                            cx[0] = srcD[firstIdx*3]; cx[1] = srcD[firstIdx*3+1]; cx[2] = srcD[firstIdx*3+2];
-                            for (let ci = 1; ci < K; ci++) {
-                                let sumD = 0;
-                                const dists = new Float32Array(n);
-                                for (let i = 0; i < n; i++) {
-                                    let minD = Infinity;
-                                    for (let j = 0; j < ci; j++) {
-                                        const dr = srcD[i*3]-cx[j*3], dg = srcD[i*3+1]-cx[j*3+1], db = srcD[i*3+2]-cx[j*3+2];
-                                        const dist = dr*dr + dg*dg + db*db;
-                                        if (dist < minD) minD = dist;
-                                    }
-                                    dists[i] = minD; sumD += minD;
-                                }
-                                let r = Math.random() * sumD;
-                                for (let i = 0; i < n; i++) {
-                                    r -= dists[i];
-                                    if (r <= 0) { cx[ci*3]=srcD[i*3]; cx[ci*3+1]=srcD[i*3+1]; cx[ci*3+2]=srcD[i*3+2]; break; }
-                                }
+
+                            // ---- Build the colour histogram (5 bits/channel) ----
+                            const binOf = new Int32Array(n);          // pixel -> compact bin index
+                            const binMap = new Map();                 // packed key -> compact index
+                            const bSum0 = [], bSum1 = [], bSum2 = [], bCount = [];
+                            for (let i = 0; i < n; i++) {
+                                const c0 = srcD[i*3], c1 = srcD[i*3+1], c2 = srcD[i*3+2];
+                                const key = ((c0>>3)<<10) | ((c1>>3)<<5) | (c2>>3);
+                                let bi = binMap.get(key);
+                                if (bi === undefined) { bi = bCount.length; binMap.set(key, bi); bSum0.push(0); bSum1.push(0); bSum2.push(0); bCount.push(0); }
+                                bSum0[bi]+=c0; bSum1[bi]+=c1; bSum2[bi]+=c2; bCount[bi]++;
+                                binOf[i] = bi;
                             }
-                            const labels = new Int32Array(n);
-                            const sums = new Float64Array(K * 3);
-                            const cnts = new Int32Array(K);
-                            for (let iter = 0; iter < 10; iter++) {
-                                let changed = false;
-                                for (let i = 0; i < n; i++) {
-                                    const r = srcD[i*3], g = srcD[i*3+1], b = srcD[i*3+2];
-                                    let minD = Infinity, best = 0;
-                                    for (let c = 0; c < K; c++) {
-                                        const dr=r-cx[c*3], dg=g-cx[c*3+1], db=b-cx[c*3+2];
-                                        const dist = dr*dr + dg*dg + db*db;
-                                        if (dist < minD) { minD=dist; best=c; }
-                                    }
-                                    if (labels[i] !== best) { labels[i]=best; changed=true; }
-                                }
-                                if (!changed && iter > 0) break;
-                                sums.fill(0); cnts.fill(0);
-                                for (let i = 0; i < n; i++) {
-                                    const c = labels[i];
-                                    sums[c*3]+=srcD[i*3]; sums[c*3+1]+=srcD[i*3+1]; sums[c*3+2]+=srcD[i*3+2]; cnts[c]++;
-                                }
-                                for (let c = 0; c < K; c++) if (cnts[c]>0) {
-                                    cx[c*3]=sums[c*3]/cnts[c]; cx[c*3+1]=sums[c*3+1]/cnts[c]; cx[c*3+2]=sums[c*3+2]/cnts[c];
-                                }
+                            const B = bCount.length;
+                            // Per-bin: true mean colour (for faithful palette), chroma-scaled clustering
+                            // coords (for the distance metric), and fairness weight = count^fairness.
+                            const bx = new Float32Array(B*3);    // clustering coords
+                            const bTrue = new Float32Array(B*3); // true (unscaled) mean colour
+                            const bw = new Float64Array(B);
+                            for (let bi = 0; bi < B; bi++) {
+                                const cnt = bCount[bi];
+                                const m0 = bSum0[bi]/cnt, m1 = bSum1[bi]/cnt, m2 = bSum2[bi]/cnt;
+                                bTrue[bi*3]=m0; bTrue[bi*3+1]=m1; bTrue[bi*3+2]=m2;
+                                bx[bi*3]   = m0;
+                                bx[bi*3+1] = useLab ? (m1-128)*chromaScale + 128 : m1;
+                                bx[bi*3+2] = useLab ? (m2-128)*chromaScale + 128 : m2;
+                                bw[bi] = Math.pow(cnt, fairness);
                             }
+
+                            // ---- Partition bins into palette labels (binLabel[bi] in [0..usedK-1]) ----
+                            const binLabel = new Int32Array(B);
+                            let usedK;
+                            if (method === 'mediancut') {
+                                // Median cut: repeatedly split the box with the largest weighted extent
+                                // at the weighted median of its longest axis. Partitions by colour-space
+                                // volume, so distinct colours get their own slot regardless of area.
+                                let boxes = [ Array.from({length:B}, (_, i) => i) ];
+                                while (boxes.length < K) {
+                                    let bestBox = -1, bestRange = -1, bestAxis = 0;
+                                    for (let q = 0; q < boxes.length; q++) {
+                                        const box = boxes[q];
+                                        if (box.length < 2) continue;
+                                        for (let ax = 0; ax < 3; ax++) {
+                                            let mn = Infinity, mx = -Infinity;
+                                            for (let t = 0; t < box.length; t++) { const v = bx[box[t]*3+ax]; if (v<mn) mn=v; if (v>mx) mx=v; }
+                                            const range = mx - mn;
+                                            if (range > bestRange) { bestRange = range; bestBox = q; bestAxis = ax; }
+                                        }
+                                    }
+                                    if (bestBox < 0) break; // nothing left to split
+                                    const box = boxes[bestBox], ax = bestAxis;
+                                    box.sort((a, b) => bx[a*3+ax] - bx[b*3+ax]);
+                                    // Split at the axis MIDPOINT (not the population median): this halves
+                                    // the colour range each time, so a sparse but far-out cluster (a vivid
+                                    // flower colour) gets carved into its own box instead of staying stuck
+                                    // to the dense mass a median cut would keep subdividing.
+                                    const mid = (bx[box[0]*3+ax] + bx[box[box.length-1]*3+ax]) / 2;
+                                    let splitIdx = 0;
+                                    for (let t = 0; t < box.length; t++) { if (bx[box[t]*3+ax] <= mid) splitIdx = t; else break; }
+                                    if (splitIdx >= box.length-1) splitIdx = box.length-2; // keep both sides non-empty
+                                    if (splitIdx < 0) splitIdx = 0;
+                                    boxes.splice(bestBox, 1, box.slice(0, splitIdx+1), box.slice(splitIdx+1));
+                                }
+                                for (let q = 0; q < boxes.length; q++) for (let t = 0; t < boxes[q].length; t++) binLabel[boxes[q][t]] = q;
+                                usedK = boxes.length;
+                            } else {
+                                // Fairness-weighted k-means over the histogram bins.
+                                const rand = mulberry32((parseInt(func.params.seed) >>> 0) || 1); // seeded → reproducible
+                                const cxs = new Float32Array(K*3);
+                                let totalW = 0; for (let bi = 0; bi < B; bi++) totalW += bw[bi];
+                                let rseed = rand()*totalW, seed0 = 0;
+                                for (let bi = 0; bi < B; bi++) { rseed -= bw[bi]; if (rseed <= 0) { seed0 = bi; break; } }
+                                cxs[0]=bx[seed0*3]; cxs[1]=bx[seed0*3+1]; cxs[2]=bx[seed0*3+2];
+                                const nearest = new Float64Array(B).fill(Infinity);
+                                for (let ci = 1; ci < K; ci++) {
+                                    let sumW = 0;
+                                    for (let bi = 0; bi < B; bi++) {
+                                        const dr=bx[bi*3]-cxs[(ci-1)*3], dg=bx[bi*3+1]-cxs[(ci-1)*3+1], db=bx[bi*3+2]-cxs[(ci-1)*3+2];
+                                        const d = dr*dr+dg*dg+db*db;
+                                        if (d < nearest[bi]) nearest[bi] = d;
+                                        sumW += bw[bi]*nearest[bi];
+                                    }
+                                    if (sumW <= 0) { cxs[ci*3]=cxs[0]; cxs[ci*3+1]=cxs[1]; cxs[ci*3+2]=cxs[2]; continue; }
+                                    let rr = rand()*sumW, pick = seed0;
+                                    for (let bi = 0; bi < B; bi++) { rr -= bw[bi]*nearest[bi]; if (rr <= 0) { pick = bi; break; } }
+                                    cxs[ci*3]=bx[pick*3]; cxs[ci*3+1]=bx[pick*3+1]; cxs[ci*3+2]=bx[pick*3+2];
+                                }
+                                const acc0=new Float64Array(K), acc1=new Float64Array(K), acc2=new Float64Array(K), accW=new Float64Array(K);
+                                const worstServedBin = () => {
+                                    // Bin whose weighted distance to its assigned centroid is largest.
+                                    let worst = -1, worstD = -1;
+                                    for (let bi = 0; bi < B; bi++) {
+                                        const cc = binLabel[bi];
+                                        const dr=bx[bi*3]-cxs[cc*3], dg=bx[bi*3+1]-cxs[cc*3+1], db=bx[bi*3+2]-cxs[cc*3+2];
+                                        const d = bw[bi]*(dr*dr+dg*dg+db*db);
+                                        if (d > worstD) { worstD = d; worst = bi; }
+                                    }
+                                    return worst;
+                                };
+                                const runLloyd = (maxIter) => {
+                                    for (let iter = 0; iter < maxIter; iter++) {
+                                        let changed = false;
+                                        for (let bi = 0; bi < B; bi++) {
+                                            let md = Infinity, best = 0;
+                                            for (let c = 0; c < K; c++) {
+                                                const dr=bx[bi*3]-cxs[c*3], dg=bx[bi*3+1]-cxs[c*3+1], db=bx[bi*3+2]-cxs[c*3+2];
+                                                const d = dr*dr+dg*dg+db*db;
+                                                if (d < md) { md = d; best = c; }
+                                            }
+                                            if (binLabel[bi] !== best) { binLabel[bi] = best; changed = true; }
+                                        }
+                                        if (!changed && iter > 0) break;
+                                        acc0.fill(0); acc1.fill(0); acc2.fill(0); accW.fill(0);
+                                        for (let bi = 0; bi < B; bi++) {
+                                            const c = binLabel[bi], w = bw[bi];
+                                            acc0[c]+=bx[bi*3]*w; acc1[c]+=bx[bi*3+1]*w; acc2[c]+=bx[bi*3+2]*w; accW[c]+=w;
+                                        }
+                                        for (let c = 0; c < K; c++) {
+                                            if (accW[c] > 0) { cxs[c*3]=acc0[c]/accW[c]; cxs[c*3+1]=acc1[c]/accW[c]; cxs[c*3+2]=acc2[c]/accW[c]; }
+                                            else {
+                                                // Reinit an empty cluster to the worst-served bin so all K
+                                                // slots stay in use — a spare slot goes to a rare colour.
+                                                const worst = worstServedBin();
+                                                if (worst >= 0) { cxs[c*3]=bx[worst*3]; cxs[c*3+1]=bx[worst*3+1]; cxs[c*3+2]=bx[worst*3+2]; }
+                                            }
+                                        }
+                                    }
+                                };
+                                runLloyd(20);
+                                // Dedup: near-identical centroids (e.g. three barely-different browns)
+                                // waste palette slots. Merge each too-close pair's lower-weight member
+                                // and reinit it to the worst-served bin, then let Lloyd resettle. This
+                                // is how a 20-colour kit affords slots for pinks/greens/highlights.
+                                const MIN_SEP2 = 12 * 12; // in scaled cluster space
+                                let dedupHit = false;
+                                const freed = new Uint8Array(K);
+                                for (let a = 0; a < K; a++) {
+                                    if (freed[a]) continue;
+                                    for (let b2 = a + 1; b2 < K; b2++) {
+                                        if (freed[b2]) continue;
+                                        const dr=cxs[a*3]-cxs[b2*3], dg=cxs[a*3+1]-cxs[b2*3+1], db=cxs[a*3+2]-cxs[b2*3+2];
+                                        if (dr*dr+dg*dg+db*db < MIN_SEP2) {
+                                            const loser = (accW[a] < accW[b2]) ? a : b2;
+                                            freed[loser] = 1;
+                                            const worst = worstServedBin();
+                                            if (worst >= 0) { cxs[loser*3]=bx[worst*3]; cxs[loser*3+1]=bx[worst*3+1]; cxs[loser*3+2]=bx[worst*3+2]; dedupHit = true; }
+                                            if (loser === a) break; // 'a' was freed; move to next 'a'
+                                        }
+                                    }
+                                }
+                                if (dedupHit) runLloyd(5);
+                                usedK = K;
+                            }
+                            if (useLab) clusterMat.delete();
                             smoothed.delete();
 
-                            // Store palette for the Analysis tab swatches (same mechanism as pixelArt)
-                            pixelArtPaletteRef.current = Array.from(
-                                { length: K },
-                                (_, i) => `rgb(${Math.round(cx[i*3])},${Math.round(cx[i*3+1])},${Math.round(cx[i*3+2])})`
-                            );
+                            // ---- Palette = weighted mean of the TRUE bin colours per label ----
+                            const pS0=new Float64Array(usedK), pS1=new Float64Array(usedK), pS2=new Float64Array(usedK), pW=new Float64Array(usedK);
+                            for (let bi = 0; bi < B; bi++) {
+                                const c = binLabel[bi], w = bw[bi];
+                                pS0[c]+=bTrue[bi*3]*w; pS1[c]+=bTrue[bi*3+1]*w; pS2[c]+=bTrue[bi*3+2]*w; pW[c]+=w;
+                            }
+                            // Compact away any empty labels and remap.
+                            const labelToPal = new Int32Array(usedK).fill(-1);
+                            const palCoords = []; // [ch0,ch1,ch2] in cluster-channel (true) space
+                            for (let c = 0; c < usedK; c++) {
+                                if (pW[c] > 0) { labelToPal[c] = palCoords.length; palCoords.push([pS0[c]/pW[c], pS1[c]/pW[c], pS2[c]/pW[c]]); }
+                            }
+                            const P = palCoords.length;
 
-                            // ---- Step 3: render the fill (colored or blank) first, contours/numbers go on top ----
-                            const offCanvasPBN = document.createElement('canvas');
-                            offCanvasPBN.width = W; offCanvasPBN.height = H;
-                            const offCtx = offCanvasPBN.getContext('2d');
-
-                            if (displayMode === 1) {
-                                offCtx.fillStyle = '#ffffff';
-                                offCtx.fillRect(0, 0, W, H);
-                            } else {
-                                const fillImgData = offCtx.createImageData(W, H);
-                                const fd = fillImgData.data;
-                                for (let i = 0; i < n; i++) {
-                                    const c = labels[i];
-                                    fd[i*4] = Math.round(cx[c*3]);
-                                    fd[i*4+1] = Math.round(cx[c*3+1]);
-                                    fd[i*4+2] = Math.round(cx[c*3+2]);
-                                    fd[i*4+3] = 255;
-                                }
-                                offCtx.putImageData(fillImgData, 0, 0);
+                            // Convert the palette from clustering space to displayable RGB (tiny 1xP strip).
+                            const palMat = new cv.Mat(1, P, cv.CV_8UC3);
+                            const pmd = palMat.data;
+                            for (let c = 0; c < P; c++) {
+                                pmd[c*3]   = Math.max(0, Math.min(255, Math.round(palCoords[c][0])));
+                                pmd[c*3+1] = Math.max(0, Math.min(255, Math.round(palCoords[c][1])));
+                                pmd[c*3+2] = Math.max(0, Math.min(255, Math.round(palCoords[c][2])));
                             }
 
-                            // ---- Step 4: per color — clean up speckle noise, trace smooth vector outlines,
-                            // and find a guaranteed-interior point per region for numbering ----
-                            offCtx.strokeStyle = '#000000';
-                            offCtx.lineWidth = lineThickness;
-                            offCtx.lineJoin = 'round';
-                            offCtx.lineCap = 'round';
-
-                            const numberJobs = []; // { x, y, text, fontSize }
-                            const maskMat = new cv.Mat(H, W, cv.CV_8U);
-                            const kernel3 = cv.Mat.ones(3, 3, cv.CV_8U);
-                            for (let c = 0; c < K; c++) {
-                                const maskData = maskMat.data;
-                                maskData.fill(0);
-                                for (let i = 0; i < n; i++) if (labels[i] === c) maskData[i] = 255;
-
-                                // Open removes isolated speckle pixels; close fills small gaps/notches —
-                                // together they turn jagged, fragmented k-means noise into clean blobs.
-                                const cleaned = new cv.Mat();
-                                cv.morphologyEx(maskMat, cleaned, cv.MORPH_OPEN, kernel3);
-                                cv.morphologyEx(cleaned, cleaned, cv.MORPH_CLOSE, kernel3);
-
-                                // Smooth vector outline (instead of a raw per-pixel boundary diff, which
-                                // renders as blocky/squiggly stair-steps at every jagged pixel edge).
-                                const contours = new cv.MatVector();
-                                const hierarchy = new cv.Mat();
-                                cv.findContours(cleaned, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
-                                for (let ci = 0; ci < contours.size(); ci++) {
-                                    const contour = contours.get(ci);
-                                    const peri = cv.arcLength(contour, true);
-                                    if (peri >= 4) {
-                                        const approx = new cv.Mat();
-                                        cv.approxPolyDP(contour, approx, Math.max(0.8, peri * 0.006), true);
-                                        const pts = approx.data32S;
-                                        if (pts.length >= 4) {
-                                            offCtx.beginPath();
-                                            offCtx.moveTo(pts[0], pts[1]);
-                                            for (let k = 2; k < pts.length; k += 2) offCtx.lineTo(pts[k], pts[k+1]);
-                                            offCtx.closePath();
-                                            offCtx.stroke();
-                                        }
-                                        approx.delete();
+                            // ---- Palette punch (kit-look): cluster means regress toward grey, but
+                            // commercial kits use vivid representative colours. Punch in Lab space.
+                            if (!useLab) cv.cvtColor(palMat, palMat, cv.COLOR_RGB2Lab);
+                            const pd = palMat.data;
+                            // Vibrance: push a*/b* away from neutral; skip near-greys so they don't tint.
+                            if (vibrance > 0) {
+                                for (let c = 0; c < P; c++) {
+                                    const ca = pd[c*3+1] - 128, cb = pd[c*3+2] - 128;
+                                    if (ca*ca + cb*cb >= 16) { // chroma >= 4
+                                        pd[c*3+1] = Math.max(0, Math.min(255, Math.round(128 + ca * (1 + vibrance))));
+                                        pd[c*3+2] = Math.max(0, Math.min(255, Math.round(128 + cb * (1 + vibrance))));
                                     }
-                                    contour.delete();
                                 }
-                                contours.delete(); hierarchy.delete();
+                            }
+                            // Value anchoring (LAB clustering only): stretch palette L so the darkest
+                            // entry hits the image's 2nd-percentile L and the lightest its 98th —
+                            // restores the near-black darks and bright highlights that averaging crushes.
+                            if (useLab && P > 1) {
+                                const order = Array.from({ length: B }, (_, i) => i).sort((x, y) => bTrue[x*3] - bTrue[y*3]);
+                                let accPix = 0, p2 = 0, p98 = 255, seenLo = false;
+                                const lo = n * 0.02, hi = n * 0.98;
+                                for (const bi of order) {
+                                    accPix += bCount[bi];
+                                    if (!seenLo && accPix >= lo) { p2 = bTrue[bi*3]; seenLo = true; }
+                                    if (accPix >= hi) { p98 = bTrue[bi*3]; break; }
+                                }
+                                let Lmin = 255, Lmax = 0;
+                                for (let c = 0; c < P; c++) { const L = pd[c*3]; if (L < Lmin) Lmin = L; if (L > Lmax) Lmax = L; }
+                                // Expansion-only: a vivid outlier cluster (e.g. a bright green dab) can
+                                // sit ABOVE the image's p98, and mapping straight onto [p2,p98] would
+                                // then COMPRESS the range and darken everything. Only ever widen.
+                                const t2 = Math.min(p2, Lmin), t98 = Math.max(p98, Lmax);
+                                if (Lmax - Lmin > 8 && t98 - t2 > Lmax - Lmin) {
+                                    for (let c = 0; c < P; c++) {
+                                        pd[c*3] = Math.max(0, Math.min(255, Math.round(t2 + (pd[c*3] - Lmin) * (t98 - t2) / (Lmax - Lmin))));
+                                    }
+                                }
+                            }
+                            cv.cvtColor(palMat, palMat, cv.COLOR_Lab2RGB);
+                            const palRGB = new Uint8Array(palMat.data); // copy out of WASM before delete
+                            palMat.delete();
 
-                                // Per-component area + interior point: distanceTransform gives, for every
-                                // foreground pixel, its distance to the nearest edge; the pixel of maximum
-                                // distance within a component is the center of its largest inscribed circle —
-                                // always strictly inside the region, unlike a raw centroid on a concave shape.
-                                // It also bounds how large a legible number can be (fitFontSize below).
-                                const markers = new cv.Mat();
-                                const numLabels = cv.connectedComponents(cleaned, markers);
-                                const dist = new cv.Mat();
-                                cv.distanceTransform(cleaned, dist, cv.DIST_L2, 5);
+                            pixelArtPaletteRef.current = Array.from(
+                                { length: P },
+                                (_, i) => `rgb(${palRGB[i*3]},${palRGB[i*3+1]},${palRGB[i*3+2]})`
+                            );
+
+                            // Paint each pixel its palette color (pixel -> bin -> label -> palette).
+                            const outP = new cv.Mat(H, W, cv.CV_8UC4);
+                            const odP = outP.data;
+                            for (let i = 0; i < n; i++) {
+                                const c = labelToPal[binLabel[binOf[i]]];
+                                odP[i*4] = palRGB[c*3]; odP[i*4+1] = palRGB[c*3+1]; odP[i*4+2] = palRGB[c*3+2]; odP[i*4+3] = 255;
+                            }
+                            dst.delete();
+                            dst = outP;
+                            break;
+                        }
+
+                        case 'pbnMergeRegions': {
+                            // Merge facets below the area threshold into the neighbor they share the
+                            // longest border with (largest→smallest). This is the key step that turns
+                            // speckly quantization into few, large, paintable regions.
+                            const W = temp.cols, H = temp.rows;
+                            const n = W * H;
+                            let minArea = parseInt(func.params.minRegionArea);
+                            if (isNaN(minArea)) minArea = 200;
+                            minArea = Math.max(1, minArea);
+                            let passes = parseInt(func.params.passes);
+                            if (isNaN(passes)) passes = 2;
+                            passes = Math.max(1, Math.min(4, passes));
+                            const protectVivid = parseInt(func.params.protectVivid) !== 0; // default On
+
+                            const td = temp.data; // RGBA
+                            // Map each pixel to a palette index (unique color -> index).
+                            const colorKey = new Int32Array(n);
+                            const keyToIdx = new Map();
+                            const palList = []; // [r,g,b] per index
+                            for (let i = 0; i < n; i++) {
+                                const r = td[i*4], g = td[i*4+1], b = td[i*4+2];
+                                const key = (r << 16) | (g << 8) | b;
+                                let idx = keyToIdx.get(key);
+                                if (idx === undefined) { idx = palList.length; keyToIdx.set(key, idx); palList.push([r,g,b]); }
+                                colorKey[i] = idx;
+                            }
+                            if (palList.length > 256) throw new Error('Too many colors — add "Posterize (K-Means)" before this step');
+
+                            const mask = new cv.Mat(H, W, cv.CV_8U);
+                            const labelsMat = new cv.Mat();
+                            for (let pass = 0; pass < passes; pass++) {
+                                // Build a global facet id per pixel via connectedComponents per color.
+                                const facetOf = new Int32Array(n).fill(-1);
+                                const facetColor = [];
+                                const facetArea = [];
+                                const P = palList.length;
+                                for (let p = 0; p < P; p++) {
+                                    const mdata = mask.data;
+                                    for (let i = 0; i < n; i++) mdata[i] = (colorKey[i] === p) ? 255 : 0;
+                                    const numLabels = cv.connectedComponents(mask, labelsMat);
+                                    if (numLabels <= 1) continue;
+                                    const lm = labelsMat.data32S;
+                                    const base = facetColor.length;
+                                    for (let l = 1; l < numLabels; l++) { facetColor.push(p); facetArea.push(0); }
+                                    for (let i = 0; i < n; i++) {
+                                        const l = lm[i];
+                                        if (l === 0) continue;
+                                        const fid = base + (l - 1);
+                                        facetOf[i] = fid;
+                                        facetArea[fid]++;
+                                    }
+                                }
+                                const F = facetColor.length;
+                                if (F === 0) break;
+
+                                // Tally shared-border length between each small facet and its neighbors.
+                                const neighborTally = new Map(); // smallFacet -> Map(neighbor -> borderCount)
+                                const addBorder = (a, b) => {
+                                    if (a === b || a < 0 || b < 0) return;
+                                    if (facetArea[a] < minArea) {
+                                        let m = neighborTally.get(a); if (!m) { m = new Map(); neighborTally.set(a, m); }
+                                        m.set(b, (m.get(b) || 0) + 1);
+                                    }
+                                    if (facetArea[b] < minArea) {
+                                        let m = neighborTally.get(b); if (!m) { m = new Map(); neighborTally.set(b, m); }
+                                        m.set(a, (m.get(a) || 0) + 1);
+                                    }
+                                };
+                                for (let y = 0; y < H; y++) {
+                                    for (let x = 0; x < W; x++) {
+                                        const i = y * W + x;
+                                        const f = facetOf[i];
+                                        if (x + 1 < W) addBorder(f, facetOf[i + 1]);
+                                        if (y + 1 < H) addBorder(f, facetOf[i + W]);
+                                    }
+                                }
+
+                                // Merge large→small so small facets prefer merging into bigger survivors.
+                                const smallFacets = [];
+                                for (let f = 0; f < F; f++) if (facetArea[f] < minArea && neighborTally.has(f)) smallFacets.push(f);
+                                smallFacets.sort((a, b) => facetArea[b] - facetArea[a]);
+
+                                const newColorOfFacet = new Int32Array(F);
+                                for (let f = 0; f < F; f++) newColorOfFacet[f] = facetColor[f];
+                                let changed = false;
+                                for (const f of smallFacets) {
+                                    const m = neighborTally.get(f);
+                                    const fc = palList[facetColor[f]];
+                                    // Candidates: neighbours with a substantial shared border (≥30% of
+                                    // the longest). Among them prefer the CLOSEST COLOUR — a pink dab
+                                    // merges into another rose region rather than the wood it touches
+                                    // most (pure longest-border was eating the flowers).
+                                    let maxCount = 0;
+                                    for (const cnt of m.values()) if (cnt > maxCount) maxCount = cnt;
+                                    let bestN = -1, bestColorDist = Infinity;
+                                    for (const [nb, count] of m) {
+                                        if (count < 0.3 * maxCount) continue;
+                                        const nc = palList[facetColor[nb]];
+                                        const cd = (fc[0]-nc[0])*(fc[0]-nc[0]) + (fc[1]-nc[1])*(fc[1]-nc[1]) + (fc[2]-nc[2])*(fc[2]-nc[2]);
+                                        if (cd < bestColorDist) { bestColorDist = cd; bestN = nb; }
+                                    }
+                                    if (bestN < 0) continue;
+                                    // Vivid-dab protection: a saturated facet with no similar-coloured
+                                    // neighbour is a deliberate accent (flower on wood) — keep it unless
+                                    // truly tiny. Commercial kits keep these dabs; they're the charm.
+                                    if (protectVivid) {
+                                        const spread = Math.max(fc[0], fc[1], fc[2]) - Math.min(fc[0], fc[1], fc[2]);
+                                        if (spread > 60 && bestColorDist > 8100 && facetArea[f] >= minArea / 4) continue;
+                                    }
+                                    if (facetColor[bestN] !== facetColor[f]) {
+                                        newColorOfFacet[f] = facetColor[bestN];
+                                        changed = true;
+                                    }
+                                }
+                                if (!changed) break;
+                                for (let i = 0; i < n; i++) {
+                                    const f = facetOf[i];
+                                    if (f >= 0) colorKey[i] = newColorOfFacet[f];
+                                }
+                            }
+                            mask.delete(); labelsMat.delete();
+
+                            // Narrow single-pixel cleanup: reassign stray dots / 1px strips (a pixel whose
+                            // 4-neighbors are all a different color) to the surrounding color.
+                            const cleanKey = new Int32Array(colorKey);
+                            for (let y = 0; y < H; y++) {
+                                for (let x = 0; x < W; x++) {
+                                    const i = y * W + x;
+                                    const me = colorKey[i];
+                                    const up = y > 0 ? colorKey[i-W] : -1;
+                                    const dn = y < H-1 ? colorKey[i+W] : -1;
+                                    const lf = x > 0 ? colorKey[i-1] : -1;
+                                    const rt = x < W-1 ? colorKey[i+1] : -1;
+                                    if (up !== me && dn !== me && lf !== me && rt !== me) {
+                                        if (lf >= 0 && lf === rt) cleanKey[i] = lf;
+                                        else if (up >= 0 && up === dn) cleanKey[i] = up;
+                                        else if (lf >= 0) cleanKey[i] = lf;
+                                        else if (up >= 0) cleanKey[i] = up;
+                                    }
+                                }
+                            }
+
+                            // Rebuild output + palette of surviving colors.
+                            const usedOrder = [];
+                            const usedSet = new Set();
+                            const outM = new cv.Mat(H, W, cv.CV_8UC4);
+                            const odM = outM.data;
+                            for (let i = 0; i < n; i++) {
+                                const idx = cleanKey[i];
+                                const col = palList[idx];
+                                odM[i*4]=col[0]; odM[i*4+1]=col[1]; odM[i*4+2]=col[2]; odM[i*4+3]=255;
+                                if (!usedSet.has(idx)) { usedSet.add(idx); usedOrder.push(idx); }
+                            }
+                            pixelArtPaletteRef.current = usedOrder.map(idx => {
+                                const c = palList[idx]; return `rgb(${c[0]},${c[1]},${c[2]})`;
+                            });
+                            dst.delete();
+                            dst = outM;
+                            break;
+                        }
+
+                        case 'pbnOutline': {
+                            // Draw shared region borders + place each palette color's number at the pole
+                            // of inaccessibility (largest-inscribed-circle center) of every facet.
+                            const W = temp.cols, H = temp.rows;
+                            const n = W * H;
+                            const displayMode = parseInt(func.params.displayMode) === 1 ? 1 : 0;
+                            const lineThickness = Math.max(1, Math.min(5, parseInt(func.params.lineThickness) || 1));
+                            // Border/number shade: 0 = black, higher = softer grey. A light grey still
+                            // reads on paper but doesn't fight the paint once the regions are filled in.
+                            let lineShade = parseInt(func.params.lineShade);
+                            if (isNaN(lineShade)) lineShade = 120;
+                            lineShade = Math.max(0, Math.min(255, lineShade));
+                            const maxFontSize = Math.max(8, parseInt(func.params.fontSize) || 16);
+                            let minLabelArea = parseInt(func.params.minLabelArea);
+                            if (isNaN(minLabelArea)) minLabelArea = 200;
+                            minLabelArea = Math.max(1, minLabelArea);
+                            const MIN_FONT_SIZE = 8; // below this a number isn't legible — skip labeling
+
+                            const td = temp.data; // RGBA
+                            // Unique colors in scan order → palette; each color's number is index + 1.
+                            const colorIdx = new Int32Array(n);
+                            const keyToIdx = new Map();
+                            const palList = [];
+                            for (let i = 0; i < n; i++) {
+                                const r = td[i*4], g = td[i*4+1], b = td[i*4+2];
+                                const key = (r << 16) | (g << 8) | b;
+                                let idx = keyToIdx.get(key);
+                                if (idx === undefined) { idx = palList.length; keyToIdx.set(key, idx); palList.push([r,g,b]); }
+                                colorIdx[i] = idx;
+                            }
+                            const P = palList.length;
+                            if (P > 256) throw new Error('Too many colors — add "Posterize (K-Means)" before this step');
+                            pixelArtPaletteRef.current = palList.map(c => `rgb(${c[0]},${c[1]},${c[2]})`);
+
+                            const canvas = document.createElement('canvas');
+                            canvas.width = W; canvas.height = H;
+                            const ctx = canvas.getContext('2d');
+                            const img = ctx.createImageData(W, H);
+                            const fd = img.data;
+                            if (displayMode === 1) {
+                                fd.fill(255); // blank white template
+                            } else {
+                                for (let i = 0; i < n; i++) {
+                                    const c = palList[colorIdx[i]];
+                                    fd[i*4]=c[0]; fd[i*4+1]=c[1]; fd[i*4+2]=c[2]; fd[i*4+3]=255;
+                                }
+                            }
+
+                            // Shared borders: a pixel is a border if a 4-neighbor has a different color
+                            // index. Built from the unified index map so adjacent regions share ONE line
+                            // (no doubled/misaligned outlines like the old per-color approach).
+                            const border = new cv.Mat(H, W, cv.CV_8U);
+                            const bd = border.data;
+                            for (let y = 0; y < H; y++) {
+                                for (let x = 0; x < W; x++) {
+                                    const i = y*W + x;
+                                    const c = colorIdx[i];
+                                    let edge = false;
+                                    if (x+1 < W && colorIdx[i+1] !== c) edge = true;
+                                    else if (y+1 < H && colorIdx[i+W] !== c) edge = true;
+                                    else if (x > 0 && colorIdx[i-1] !== c) edge = true;
+                                    else if (y > 0 && colorIdx[i-W] !== c) edge = true;
+                                    bd[i] = edge ? 255 : 0;
+                                }
+                            }
+                            if (lineThickness > 1) {
+                                const k = cv.Mat.ones(lineThickness, lineThickness, cv.CV_8U);
+                                cv.dilate(border, border, k);
+                                k.delete();
+                            }
+                            const bd2 = border.data;
+                            for (let i = 0; i < n; i++) {
+                                if (bd2[i]) { fd[i*4]=lineShade; fd[i*4+1]=lineShade; fd[i*4+2]=lineShade; fd[i*4+3]=255; }
+                            }
+                            border.delete();
+                            ctx.putImageData(img, 0, 0);
+
+                            // Per palette color: connectedComponents + distanceTransform → the pixel of
+                            // maximum distance-to-edge is the center of the largest inscribed circle,
+                            // always strictly inside the region and bounding a legible font size.
+                            const numberJobs = [];
+                            const mask = new cv.Mat(H, W, cv.CV_8U);
+                            const markers = new cv.Mat();
+                            const dist = new cv.Mat();
+                            for (let p = 0; p < P; p++) {
+                                const md = mask.data;
+                                for (let i = 0; i < n; i++) md[i] = (colorIdx[i] === p) ? 255 : 0;
+                                const numLabels = cv.connectedComponents(mask, markers);
+                                if (numLabels <= 1) continue;
+                                cv.distanceTransform(mask, dist, cv.DIST_L2, 5);
                                 const mArr = markers.data32S;
                                 const dArr = dist.data32F;
                                 const compCount = new Int32Array(numLabels);
@@ -2618,7 +3214,7 @@ const OpenCVInteractive = () => {
                                 const compMaxY = new Int32Array(numLabels);
                                 for (let y = 0; y < H; y++) {
                                     for (let x = 0; x < W; x++) {
-                                        const idx = y * W + x;
+                                        const idx = y*W + x;
                                         const comp = mArr[idx];
                                         if (comp === 0) continue;
                                         compCount[comp]++;
@@ -2627,30 +3223,29 @@ const OpenCVInteractive = () => {
                                     }
                                 }
                                 for (let comp = 1; comp < numLabels; comp++) {
-                                    if (compCount[comp] < minArea) continue;
+                                    if (compCount[comp] < minLabelArea) continue;
                                     const fitFontSize = Math.min(maxFontSize, Math.floor(compMaxDist[comp] * 1.5));
-                                    if (fitFontSize < MIN_FONT_SIZE) continue; // inscribed circle too small to label
-                                    numberJobs.push({ x: compMaxX[comp], y: compMaxY[comp], text: String(c + 1), fontSize: fitFontSize });
+                                    if (fitFontSize < MIN_FONT_SIZE) continue;
+                                    numberJobs.push({ x: compMaxX[comp], y: compMaxY[comp], text: String(p + 1), fontSize: fitFontSize });
                                 }
-                                markers.delete(); dist.delete(); cleaned.delete();
                             }
-                            maskMat.delete(); kernel3.delete();
+                            mask.delete(); markers.delete(); dist.delete();
 
-                            // ---- Step 5: stamp numbers, each sized to fit its own region ----
-                            offCtx.textAlign = 'center';
-                            offCtx.textBaseline = 'middle';
-                            offCtx.fillStyle = '#000000';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
                             for (const job of numberJobs) {
-                                offCtx.font = `bold ${job.fontSize}px sans-serif`;
-                                offCtx.lineWidth = Math.max(2, Math.round(job.fontSize / 5));
-                                offCtx.strokeStyle = '#ffffff';
-                                offCtx.strokeText(job.text, job.x, job.y);
-                                offCtx.fillText(job.text, job.x, job.y);
+                                ctx.font = `bold ${job.fontSize}px sans-serif`;
+                                ctx.lineWidth = Math.max(2, Math.round(job.fontSize / 5));
+                                ctx.strokeStyle = '#ffffff'; // white halo keeps the soft-grey number legible on coloured fills
+                                ctx.fillStyle = `rgb(${lineShade},${lineShade},${lineShade})`;
+                                ctx.strokeText(job.text, job.x, job.y);
+                                ctx.fillText(job.text, job.x, job.y);
                             }
 
-                            // ---- Step 6: back to cv.Mat ----
-                            const resultImgDataPBN = offCtx.getImageData(0, 0, W, H);
-                            dst = cv.matFromArray(H, W, cv.CV_8UC4, resultImgDataPBN.data);
+                            const resultImg = ctx.getImageData(0, 0, W, H);
+                            const outO = cv.matFromArray(H, W, cv.CV_8UC4, resultImg.data);
+                            dst.delete();
+                            dst = outO;
                             break;
                         }
 
@@ -3289,6 +3884,17 @@ const OpenCVInteractive = () => {
                                                                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                                                                 ))}
                                                             </select>
+                                                        ) : param.type==='seed' ? (
+                                                            <div style={{display:'flex',gap:5,alignItems:'center'}}>
+                                                                <input type="number" value={func.params[param.name]}
+                                                                    onChange={e=>updateParameter(index,param.name,parseInt(e.target.value)||1)}
+                                                                    className="prop-input" style={{flex:1,minWidth:0}}/>
+                                                                <button title="Regenerate — roll a new random variation of this result"
+                                                                    onClick={()=>updateParameter(index,param.name,Math.floor(Math.random()*1e9))}
+                                                                    style={{display:'flex',alignItems:'center',justifyContent:'center',padding:'3px 6px',borderRadius:5,background:'var(--bg-surface)',border:`1px solid ${T.border}`,color:'var(--text-secondary)',cursor:'pointer',flexShrink:0}}>
+                                                                    <MaterialIcon name="casino" size={14}/>
+                                                                </button>
+                                                            </div>
                                                         ) : (
                                                             <input type="number"
                                                                 value={func.params[param.name]}
