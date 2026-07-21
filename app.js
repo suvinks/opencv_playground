@@ -18,7 +18,6 @@ const MaterialIcon = ({ name, size = 24, className = "", style = {}, ...rest }) 
 );
 
 // Icon component wrappers for Material Icons
-const Plus = ({ size = 24 }) => <MaterialIcon name="add" size={size} />;
 const X = ({ size = 24 }) => <MaterialIcon name="close" size={size} />;
 const Eye = ({ size = 24 }) => <MaterialIcon name="visibility" size={size} />;
 const EyeOff = ({ size = 24 }) => <MaterialIcon name="visibility_off" size={size} />;
@@ -26,9 +25,6 @@ const Upload = ({ size = 24 }) => <MaterialIcon name="upload" size={size} />;
 const Download = ({ size = 24 }) => <MaterialIcon name="download" size={size} />;
 const ChevronDown = ({ size = 24 }) => <MaterialIcon name="keyboard_arrow_down" size={size} />;
 const ChevronRight = ({ size = 24 }) => <MaterialIcon name="keyboard_arrow_right" size={size} />;
-const GripVertical = ({ size = 24 }) => <MaterialIcon name="drag_indicator" size={size} />;
-const Code = ({ size = 24 }) => <MaterialIcon name="code" size={size} />;
-const FileText = ({ size = 24 }) => <MaterialIcon name="description" size={size} />;
 
 // ==================== OPENCV FUNCTION DEFINITIONS ====================
 const OPENCV_CATEGORIES = {
