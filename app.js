@@ -2205,6 +2205,9 @@ const OpenCVInteractive = () => {
                         }
                         case 'invert': {
                             cv.bitwise_not(temp, dst);
+                            for (let i = 3; i < dst.data.length; i += 4) {
+                                dst.data[i] = temp.data[i];
+                            }
                             break;
                         }
                         case 'crop': {
@@ -3604,7 +3607,7 @@ const OpenCVInteractive = () => {
         <div className="grid-container" style={{gridTemplateRows:`48px 1fr ${bottomPanelCollapsed?36:bottomPanelHeight}px`}}>
             {/* ── Header Logo ── */}
             <div className="header-logo">
-                <img src="assets/logo.png" alt="OpenCV Playground"
+                <img src={theme === 'dark' ? 'assets/logo_dark.png' : 'assets/logo.png'} alt="OpenCV Playground"
                     style={{height:32,width:'auto',objectFit:'contain',display:'block'}}/>
             </div>
 
