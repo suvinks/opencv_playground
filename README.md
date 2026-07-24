@@ -313,10 +313,10 @@ opencv-playground/
 - **Solution**: Ensure you have OpenCV installed (`pip install opencv-python`)
 
 **Issue**: OCR showing "Error: undefined" or not working
-- **Solution**: Check internet connection (first run downloads language data), try refreshing page, or see [OCR_TROUBLESHOOTING.md](OCR_TROUBLESHOOTING.md) for detailed solutions
+- **Solution**: Check internet connection (first run downloads language data), try refreshing page
 
 **Issue**: OCR Error 403 - "Network error while fetching... Response code: 403"
-- **Solution**: 🚨 **COMMON ISSUE** - Hard refresh the page (Ctrl+Shift+R or Cmd+Shift+R). See [FIX_403_ERROR.md](FIX_403_ERROR.md) for complete fix.
+- **Solution**: 🚨 **COMMON ISSUE** - Hard refresh the page (Ctrl+Shift+R or Cmd+Shift+R). 
 
 **Issue**: OCR not detecting text accurately
 - **Solution**: Pre-process image with grayscale, CLAHE, adaptive threshold, and noise reduction. Try different PSM modes (PSM 6 for documents, PSM 7 for single lines).
